@@ -1,0 +1,59 @@
+#include <Servo.h>
+
+// Pin Definitions
+const int IR_SENSOR_PIN = 2;   // IR Sensor output connected to Digital Pin 2[span_3](start_span)[span_3](end_span)
+const int SERVO_PIN = 9;       // Servo motor signal connected to Digital Pin 9[span_4](start_span)[span_4](end_span)
+const int MOTOR_IN1 = 4;       // L298N Motor Driver Input 1[span_5](start_span)[span_5](end_span)
+const int MOTOR_IN2 = 5;       // L298N Motor Driver Input 2[span_6](start_span)[span_6](end_span)
+const int MOTOR_ENA = 6;       // L298N Motor Driver Enable A (Speed Control)[span_7](start_span)[span_7](end_span)
+
+Servo sortingGate;
+String incomingCommand = "";
+
+void setup() {
+  // Initialize Serial Communication at 9600 baud rate
+  Serial.begin(9600);
+  
+  // Initialize Pins
+  pinMode(IR_SENSOR_PIN, INPUT);
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  pinMode(MOTOR_ENA, OUTPUT);
+  
+  // Attach Servo and set to default "neutral/middle" position (90 degrees)
+  sortingGate.attach(SERVO_PIN);
+  sortingGate.write(90); 
+  
+  // Start the Conveyor Belt Motor (Forward direction at ~70% speed)[span_8](start_span)[span_8](end_span)
+  digitalWrite(MOTOR_IN1, HIGH);
+  digitalWrite(MOTOR_IN2, LOW);
+  analogWrite(MOTOR_ENA, 180); 
+}
+
+void loop() {
+  // 1. Check if an item is passing the IR Sensor[span_9](start_span)[span_9](end_span)
+  // Note: Most IR modules output LOW (0) when an object blocks the beam
+  if (digitalRead(IR_SENSOR_PIN) == LOW) {
+    Serial.println("OBJECT_DETECTED");
+    delay(1000); // Simple debounce to prevent duplicate triggers
+  }
+  
+  // 2. Listen for sorting commands from the Laptop AI over USB[span_10](start_span)[span_10](end_span)
+  if (Serial.available() > 0) {
+    incomingCommand = Serial.readStringUntil('\n');
+    incomingCommand.trim(); // Remove any accidental spaces or hidden newline characters
+    
+    if (incomingCommand == "BIO") {
+      // Rotate gate left for Biodegradable waste[span_11](start_span)[span_11](end_span)
+      sortingGate.write(45);
+      delay(2000);             // Wait 2 seconds for waste to clear into bin
+      sortingGate.write(90);   // Return to center
+    } 
+    else if (incomingCommand == "NON") {
+      // Rotate gate right for Non-Biodegradable waste[span_12](start_span)[span_12](end_span)
+      sortingGate.write(135);
+      delay(2000);             // Wait 2 seconds for waste to clear into bin
+      sortingGate.write(90);   // Return to center
+    }
+  }
+}
