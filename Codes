@@ -1,0 +1,123 @@
+#1: Model Architecture and Fine-Tuning Setup 
+import torch
+import torch.nn as nn
+from torchvision import models
+
+def build_waste_classifier(num_classes=2):
+    # Initialize pre-trained ResNet-18 weights
+    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+    
+    # Freeze early generic feature extraction blocks (conv1 through layer2)
+    for name, param in model.named_parameters():
+        if "layer3" not in name and "layer4" not in name and "fc" not in name:
+            param.requires_grad = False
+            
+    # Reconfigure the classification head for binary prediction
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Sequential(
+        nn.Dropout(p=0.3),
+        nn.Linear(num_ftrs, num_classes)
+    )
+    return model
+
+# Optimize deeper residual layers on CPU
+device = torch.device("cpu")
+torch.set_num_threads(4)
+model = build_waste_classifier().to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(
+    filter(lambda p: p.requires_grad, model.parameters()), 
+    lr=0.0003
+)
+#2: Laplacian Background Filter and Inference Engine 
+import cv2
+import time
+import torch
+import numpy as np
+
+def check_object_presence(roi, threshold=110.0):
+    """Computes Laplacian variance to detect object presence on stage."""
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return variance >= threshold, variance
+
+def evaluate_frame(roi, model, transform, device):
+    """Executes single-frame PyTorch inference over preprocessed ROI."""
+    rgb_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+    input_tensor = transform(rgb_roi).unsqueeze(0).to(device)
+    
+    with torch.no_grad():
+        logits = model(input_tensor)
+        probabilities = torch.softmax(logits, dim=1)[0]
+        confidence, predicted_idx = torch.max(probabilities, dim=0)
+        
+    return predicted_idx.item(), confidence.item()
+#3: Temporal Stability Gate and Serial Dispatch 
+import serial
+
+# Configure serial link to Arduino Uno
+ser = serial.Serial(port='COM11', baudrate=9600, timeout=1)
+time.sleep(2.0)  # Wait for serial handshake
+
+candidate_label = None
+timer_start = 0.0
+CONFIRMATION_TIME = 5.0
+CONFIDENCE_THRESHOLD = 0.75
+
+def process_detection(pred_class, conf):
+    global candidate_label, timer_start
+    
+    if conf < CONFIDENCE_THRESHOLD:
+        candidate_label = None
+        return "LOW CONFIDENCE", 0.0
+
+    current_time = time.time()
+    if candidate_label != pred_class:
+        candidate_label = pred_class
+        timer_start = current_time
+        return "TRACKING", 0.0
+        
+    elapsed = current_time - timer_start
+    progress = min(1.0, elapsed / CONFIRMATION_TIME)
+    
+    if elapsed >= CONFIRMATION_TIME:
+        # Transmit single-byte trigger command
+        cmd = b'B' if candidate_label == 0 else b'N'
+        ser.write(cmd)
+        candidate_label = None  # Reset tracking state
+        return "TRIGGERED", 1.0
+        
+    return "CONFIRMING", progress
+#4: Arduino Microcontroller Actuation Firmware
+#include <Servo.h>
+
+Servo sortingFlap;
+const int SERVO_PIN = 9;
+const int POS_NEUTRAL = 90;
+const int POS_BIODEGRADABLE = 0;
+const int POS_NON_BIODEGRADABLE = 180;
+
+void setup() {
+  Serial.begin(9600);
+  sortingFlap.attach(SERVO_PIN);
+  sortingFlap.write(POS_NEUTRAL);
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    char command = Serial.read();
+    
+    if (command == 'B') {
+      // Actuate left chute for Biodegradable waste
+      sortingFlap.write(POS_BIODEGRADABLE);
+      delay(3000);  // 3-second hold to ensure discharge
+      sortingFlap.write(POS_NEUTRAL);
+    } 
+    else if (command == 'N') {
+      // Actuate right chute for Non-Biodegradable waste
+      sortingFlap.write(POS_NON_BIODEGRADABLE);
+      delay(3000);  // 3-second hold to ensure discharge
+      sortingFlap.write(POS_NEUTRAL);
+    }
+  }
+}
